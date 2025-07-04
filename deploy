@@ -1,0 +1,1 @@
+python deploy_models.py --model ransomware_model.pkl
