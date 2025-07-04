@@ -7,115 +7,149 @@ on:
     branches: ["main"]
 
 env:
-  PYTHON_VERSION: "3.10.12"  # Explicit patch version known to work
+  PYTHON_VERSION: "3.10.12"
   MODEL_DIR: "models"
   DATA_DIR: "data"
 
 jobs:
   setup:
-    runs-on: ubuntu-22.04  # Specific supported runner image
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       
-      - name: Verify Python installation
-        id: setup-python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           
-      - name: Check Python availability
+      - name: Create directories
         run: |
-          python --version
-          which python
-          [ -f "$(which python)" ] || exit 1
-          
-      - name: Create workspace directories
-        run: |
-          mkdir -pv ${{ env.MODEL_DIR }}
-          mkdir -pv ${{ env.DATA_DIR }}
-          ls -la
-          
+          mkdir -p ${{ env.MODEL_DIR }}
+          mkdir -p ${{ env.DATA_DIR }}
+
       - name: Install core dependencies
         run: |
-          python -m ensurepip --upgrade
-          python -m pip install --upgrade pip setuptools wheel
-          pip install numpy==1.24.0 pandas==2.0.0  # Pinned stable versions
+          python -m pip install --upgrade pip
+          pip install numpy==1.24.0 pandas==2.0.0 scikit-learn==1.3.0
 
-  train-models:
+  train-ransomware:
     needs: setup
     runs-on: ubuntu-22.04
-    strategy:
-      matrix:
-        model: ["ransomware", "ddos"]
-      fail-fast: false
     steps:
       - uses: actions/checkout@v4
       
-      - name: Set up identical Python environment
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           
-      - name: Install model-specific dependencies
+      - name: Install ransomware-specific dependencies
         run: |
-          pip install -r requirements-${{ matrix.model }}.txt
+          pip install tensorflow==2.12.0 keras==2.12.0
           
-      - name: Generate guaranteed valid training data
+      - name: Generate ransomware training data
         run: |
           python -c "
           import numpy as np
-          if '${{ matrix.model }}' == 'ransomware':
-            data = np.random.randint(0,2,(1000,20))
-          else:
-            data = np.random.uniform(0,1,(1000,15))
-          np.savetxt('${{ env.DATA_DIR }}/${{ matrix.model }}_train.csv', data, delimiter=',')
+          from sklearn.datasets import make_classification
+          X, y = make_classification(n_samples=1000, n_features=20, n_classes=2, random_state=42)
+          np.savez('${{ env.DATA_DIR }}/ransomware_data.npz', X=X, y=y)
           "
           
-      - name: Run training with fallback
+      - name: Train ransomware model
         run: |
-          set +e
-          python src/train_${{ matrix.model }}_model.py \
-            --data ${{ env.DATA_DIR }}/${{ matrix.model }}_train.csv \
-            --output ${{ env.MODEL_DIR }}/${{ matrix.model }}_model.pkl
+          python -c "
+          import numpy as np
+          from sklearn.ensemble import RandomForestClassifier
+          from joblib import dump
           
-          if [ ! -f "${{ env.MODEL_DIR }}/${{ matrix.model }}_model.pkl" ]; then
-            echo "Creating fallback model..."
-            python -c "
-            import pickle
-            with open('${{ env.MODEL_DIR }}/${{ matrix.model }}_model.pkl','wb') as f:
-              pickle.dump({'model':'${{ matrix.model }}','fallback':True}, f)
-            "
-          fi
-          exit 0
+          data = np.load('${{ env.DATA_DIR }}/ransomware_data.npz')
+          X, y = data['X'], data['y']
+          
+          model = RandomForestClassifier(n_estimators=100, random_state=42)
+          model.fit(X, y)
+          
+          dump(model, '${{ env.MODEL_DIR }}/ransomware_model.joblib')
+          print('Ransomware model trained successfully')
+          "
 
-  upload:
-    needs: train-models
+  train-ddos:
+    needs: setup
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       
-      - name: Verify artifacts
-        run: |
-          ls -lh ${{ env.MODEL_DIR }}
-          [ -f "${{ env.MODEL_DIR }}/ransomware_model.pkl" ] || exit 0
-          [ -f "${{ env.MODEL_DIR }}/ddos_model.pkl" ] || exit 0
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
           
+      - name: Install DDoS-specific dependencies
+        run: |
+          pip install xgboost==1.7.3 scipy==1.10.1
+          
+      - name: Generate DDoS training data
+        run: |
+          python -c "
+          import numpy as np
+          from sklearn.datasets import make_classification
+          X, y = make_classification(n_samples=1500, n_features=15, n_classes=2, 
+                                   n_clusters_per_class=1, random_state=42)
+          np.savez('${{ env.DATA_DIR }}/ddos_data.npz', X=X, y=y)
+          "
+          
+      - name: Train DDoS model
+        run: |
+          python -c "
+          import numpy as np
+          from xgboost import XGBClassifier
+          from joblib import dump
+          
+          data = np.load('${{ env.DATA_DIR }}/ddos_data.npz')
+          X, y = data['X'], data['y']
+          
+          model = XGBClassifier(n_estimators=100, random_state=42)
+          model.fit(X, y)
+          
+          dump(model, '${{ env.MODEL_DIR }}/ddos_model.joblib')
+          print('DDoS model trained successfully')
+          "
+
+  verify-models:
+    needs: [train-ransomware, train-ddos]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Check model files
+        run: |
+          echo "Model files:"
+          ls -lh ${{ env.MODEL_DIR }}
+          [ -f "${{ env.MODEL_DIR }}/ransomware_model.joblib" ] || exit 1
+          [ -f "${{ env.MODEL_DIR }}/ddos_model.joblib" ] || exit 1
+          
+      - name: Test model loading
+        run: |
+          python -c "
+          from joblib import load
+          try:
+              ransomware_model = load('${{ env.MODEL_DIR }}/ransomware_model.joblib')
+              ddos_model = load('${{ env.MODEL_DIR }}/ddos_model.joblib')
+              print('Models loaded successfully')
+          except Exception as e:
+              print(f'Error loading models: {str(e)}')
+              raise
+          "
+
+  upload:
+    needs: verify-models
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      
       - name: Upload models
         uses: actions/upload-artifact@v4
         with:
           name: threat-models
-          path: ${{ env.MODEL_DIR }}/*.pkl
-          if-no-files-found: warn
-          retention-days: 3
-
-  notify:
-    needs: upload
-    runs-on: ubuntu-22.04
-    if: always()
-    steps:
-      - name: Completion status
-        run: |
-          echo "Workflow finished with:"
-          echo "- Python: ${{ env.PYTHON_VERSION }}"
-          echo "- Models generated in: ${{ env.MODEL_DIR }}"
-          echo "- Runner: ubuntu-22.04"
+          path: ${{ env.MODEL_DIR }}/*.joblib
+          retention-days: 7
