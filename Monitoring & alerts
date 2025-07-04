@@ -1,0 +1,11 @@
+# Send alerts to SIEM (Splunk/Sentinel)
+import requests
+
+def send_to_siem(alert):
+    requests.post(
+        "https://your.siem.com/api/alerts",
+        json={
+            "source": "CrowdStrike+AI",
+            "message": alert
+        }
+    )
