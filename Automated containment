@@ -1,0 +1,14 @@
+from falconpy import Hosts
+
+def trigger_containment(device_id):
+    # Isolate endpoint
+    hosts = Hosts(client_id=FALCON_CLIENT_ID, client_secret=FALCON_CLIENT_SECRET)
+    hosts.perform_action(action_name="contain", ids=[device_id])
+    
+    # Create detection in Falcon console
+    detects = Detects(client_id=FALCON_CLIENT_ID, client_secret=FALCON_CLIENT_SECRET)
+    detects.create_detection(
+        name="AI-Detected Ransomware",
+        severity="Critical",
+        behaviors=[{"tactic": "TA0040", "technique": "T1486"}]
+    )
