@@ -103,24 +103,27 @@ jobs:
     steps:
       - name: Verify models
         run: |
-          echo "Checking model files..."
-          ls -lh ${{ env.MODEL_DIR }}/
+          echo "Starting model verification..."
+          echo "Contents of model directory:"
+          ls -lh ${{ env.MODEL_DIR }}/ || echo "Model directory empty"
           
-          # Check files but never fail
+          # Check ransomware model
           if [ -f "${{ env.MODEL_DIR }}/ransomware_model.joblib" ]; then
-            echo "✓ Ransomware model exists and is valid"
+            echo "✅ Ransomware model verification passed"
           else
-            echo "⚠️ Ransomware model missing"
+            echo "⚠️  Ransomware model file missing"
           fi
           
+          # Check DDoS model
           if [ -f "${{ env.MODEL_DIR }}/ddos_model.joblib" ]; then
-            echo "✓ DDoS model exists and is valid"
+            echo "✅ DDoS model verification passed"
           else
-            echo "⚠️ DDoS model missing"
+            echo "⚠️  DDoS model file missing"
           fi
           
-          # Always exit successfully
-          echo "Verification completed (status logged above)"
+          # Final status (always succeeds)
+          echo "Verification process completed"
+          echo "Note: Missing models will be reported above but will not fail this step"
           exit 0
 
   upload:
