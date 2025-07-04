@@ -1,0 +1,14 @@
+from falconpy import EventStreams
+
+# Authenticate
+auth = EventStreams(client_id=FALCON_CLIENT_ID, client_secret=FALCON_CLIENT_SECRET)
+
+# Stream endpoint events (process executions, file modifications)
+for event in auth.stream_events():
+    if event["event_type"] == "ProcessRollup2":
+        process_name = event["event"]["ImageFileName"]
+        command_line = event["event"]["CommandLine"]
+        
+        # Send to AI model for ransomware detection
+        if detect_ransomware(process_name, command_line):
+            trigger_containment(event["device_id"])
