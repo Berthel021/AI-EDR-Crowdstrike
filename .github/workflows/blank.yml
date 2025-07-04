@@ -16,14 +16,18 @@ env:
 jobs:
   train-models:
     runs-on: ubuntu-latest
-    container: python:3.8
+    container: python:3.8-slim  # Using explicit slim image
     steps:
       - uses: actions/checkout@v4
       
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.8'
+          python-version: '3.8.18'  # Explicit patch version
+          architecture: 'x64'
+          
+      - name: Verify Python
+        run: python --version
           
       - name: Cache model dependencies
         uses: actions/cache@v3
