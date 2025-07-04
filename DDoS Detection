@@ -1,0 +1,10 @@
+from falconpy import Spotlight
+
+def check_ddos_participation(device_id):
+    # Query network connections
+    spotlight = Spotlight(client_id=FALCON_CLIENT_ID, client_secret=FALCON_CLIENT_SECRET)
+    connections = spotlight.query_network_connections(device_id)
+    
+    # Analyze for DDoS patterns (high outbound packets)
+    if connections["total_packets"] > 1000/second:
+        return True
