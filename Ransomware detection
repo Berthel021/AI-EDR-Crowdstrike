@@ -1,0 +1,14 @@
+import joblib
+from falconpy import Detects
+
+# Load pre-trained model
+model = joblib.load("ransomware_model.pkl")
+
+def detect_ransomware(process_name, cmdline):
+    # Feature extraction (example)
+    features = {
+        "encryption_keywords": int("encrypt" in cmdline.lower()),
+        "shadow_copy_deletion": int("vssadmin" in cmdline.lower()),
+        "entropy": calculate_entropy(process_name)
+    }
+    return model.predict([list(features.values())])[0] == 1  # 1=malicious
