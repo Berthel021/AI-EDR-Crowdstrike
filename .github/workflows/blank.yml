@@ -18,17 +18,25 @@ jobs:
     runs-on: ubuntu-latest
     container: python:3.8
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.8'
           
+      - name: Cache model dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/pip
+            models/
+          key: ${{ runner.os }}-models-${{ hashFiles('requirements.txt') }}
+          
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
-          pip install boto3 scikit-learn tensorflow
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt boto3 scikit-learn tensorflow --no-cache-dir
           
       - name: Train Ransomware Model
         run: |
@@ -43,10 +51,13 @@ jobs:
             --output models/ddos_model.pkl
       
       - name: Upload Models
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: threat-models
-          path: models/*.pkl
+          path: |
+            models/ransomware_model.pkl
+            models/ddos_model.pkl
+          retention-days: 7
 
   test-integration:
     needs: train-models
@@ -57,10 +68,10 @@ jobs:
         ports:
           - "8080:8080"
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       - name: Download Models
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: threat-models
           path: models
@@ -69,12 +80,14 @@ jobs:
         env:
           FALCON_BASE_URL: "http://localhost:8080"
         run: |
+          pip install pytest pytest-cov
           pytest tests/integration/ \
             --cov=src \
-            --cov-report=xml
+            --cov-report=xml \
+            --log-level=DEBUG
           
       - name: Upload Coverage
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v4
 
   deploy-to-aws:
     needs: test-integration
@@ -83,27 +96,32 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       - name: Download Models
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: threat-models
           path: models
           
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v2
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_IAM_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-action-${{ github.run_id }}
           
       - name: Login to Amazon ECR
         id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v1
+        uses: aws-actions/amazon-ecr-login@v2
           
       - name: Build Docker Image
         run: |
-          docker build -t $ECR_REPO:$GITHUB_SHA .
+          docker buildx create --use
+          docker buildx build \
+            --platform linux/amd64 \
+            -t $ECR_REPO:$GITHUB_SHA \
+            --load .
           
       - name: Push to ECR
         run: |
@@ -113,16 +131,20 @@ jobs:
         run: |
           aws lambda update-function-code \
             --function-name CrowdStrikeAIDetector \
-            --image-uri $ECR_REPO:$GITHUB_SHA
+            --image-uri $ECR_REPO:$GITHUB_SHA \
+            --region $AWS_REGION
 
   falcon-api-validation:
     needs: deploy-to-aws
     runs-on: ubuntu-latest
     steps:
       - name: Test Live Falcon API
-        uses: fjogeleit/http-request-action@v1
+        uses: fjogeleit/http-request-action@v2
         with:
           url: "https://api.crowdstrike.com/detects?filter=ai_model:true"
           method: GET
           customHeaders: '{"Authorization": "Bearer ${{ secrets.FALCON_API_KEY }}"}'
           timeout: 10000
+          retryOnError: true
+          retryDelay: 5000
+          maxRetries: 3
