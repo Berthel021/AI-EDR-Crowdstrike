@@ -15,52 +15,66 @@ env:
 
 jobs:
   train-models:
-    runs-on: ubuntu-22.04  # Explicitly specify supported Ubuntu version
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10.13'  # Verified available version for ubuntu-22.04
-          architecture: 'x64'
+          python-version: '3.9.18'  # Verified stable version for Ubuntu 22.04
           
-      - name: Verify Python
-        run: python --version
+      - name: Verify Python installation
+        run: |
+          python --version
+          pip --version
           
-      - name: Cache model dependencies
+      - name: Cache dependencies
         uses: actions/cache@v3
+        id: cache
         with:
           path: |
             ~/.cache/pip
+            ~/.cache/tensorflow
             models/
-          key: ${{ runner.os }}-models-${{ hashFiles('requirements.txt') }}
-          
-      - name: Install dependencies
+          key: ${{ runner.os }}-py-${{ hashFiles('requirements.txt') }}-${{ hashFiles('src/*.py') }}
+          restore-keys: |
+            ${{ runner.os }}-py-${{ hashFiles('requirements.txt') }}-
+            
+      - name: Install system dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt boto3 scikit-learn tensorflow --no-cache-dir
+          sudo apt-get update
+          sudo apt-get install -y libpython3.9-dev python3.9-distutils
           
-      - name: Train Ransomware Model
+      - name: Install Python dependencies
         run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt --no-cache-dir
+          pip install boto3 scikit-learn tensorflow==2.12.0  # Pinned stable version
+          
+      - name: Train models
+        run: |
+          mkdir -p models
           python src/train_ransomware_model.py \
             --data cic-ids-2017 \
             --output models/ransomware_model.pkl
-          
-      - name: Train DDoS Model
-        run: |
+            
           python src/train_ddos_model.py \
             --data cic-ddos-2019 \
             --output models/ddos_model.pkl
-      
-      - name: Upload Models
+            
+      - name: Validate model files
+        run: |
+          [ -f models/ransomware_model.pkl ] || exit 1
+          [ -f models/ddos_model.pkl ] || exit 1
+          
+      - name: Upload models
         uses: actions/upload-artifact@v4
         with:
           name: threat-models
-          path: |
-            models/ransomware_model.pkl
-            models/ddos_model.pkl
+          path: models/*.pkl
           retention-days: 7
+          if-no-files-found: error
 
   test-integration:
     needs: train-models
@@ -73,24 +87,48 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Download Models
+      - name: Download models
         uses: actions/download-artifact@v4
         with:
           name: threat-models
           path: models
           
-      - name: Run Integration Tests
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9.18'
+          
+      - name: Install test dependencies
+        run: |
+          pip install pytest pytest-cov pytest-mock
+          
+      - name: Run tests
         env:
           FALCON_BASE_URL: "http://localhost:8080"
+          TEST_ENV: "ci"
         run: |
-          pip install pytest pytest-cov
           pytest tests/integration/ \
             --cov=src \
             --cov-report=xml \
-            --log-level=DEBUG
+            --junitxml=test-results.xml \
+            --log-level=DEBUG \
+            -v
           
-      - name: Upload Coverage
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: |
+            test-results.xml
+            coverage.xml
+          
+      - name: Upload coverage
         uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.xml
+          flags: integration_tests
 
   deploy-to-aws:
     needs: test-integration
@@ -101,48 +139,51 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Download Models
+      - name: Download models
         uses: actions/download-artifact@v4
         with:
           name: threat-models
           path: models
           
-      - name: Configure AWS Credentials
+      - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_IAM_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: github-action-${{ github.run_id }}
+          role-duration-seconds: 3600
           
-      - name: Login to Amazon ECR
-        id: login-ecr
+      - name: Login to ECR
+        id: ecr
         uses: aws-actions/amazon-ecr-login@v2
           
-      - name: Build Docker Image
+      - name: Build and push
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ env.ECR_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
           docker buildx create --use
           docker buildx build \
             --platform linux/amd64 \
-            -t $ECR_REPO:$GITHUB_SHA \
-            --load .
-          
-      - name: Push to ECR
-        run: |
-          docker push $ECR_REPO:$GITHUB_SHA
-          
-      - name: Deploy Lambda
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            --push .
+            
+      - name: Deploy to Lambda
         run: |
           aws lambda update-function-code \
             --function-name CrowdStrikeAIDetector \
-            --image-uri $ECR_REPO:$GITHUB_SHA \
-            --region $AWS_REGION
+            --image-uri $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            --region $AWS_REGION \
+            --output json
 
   falcon-api-validation:
     needs: deploy-to-aws
     runs-on: ubuntu-22.04
     steps:
-      - name: Test Live Falcon API
+      - name: API Health Check
         uses: fjogeleit/http-request-action@v2
+        id: falcon-check
         with:
           url: "https://api.crowdstrike.com/detects?filter=ai_model:true"
           method: GET
@@ -151,3 +192,10 @@ jobs:
           retryOnError: true
           retryDelay: 5000
           maxRetries: 3
+          
+      - name: Verify response
+        run: |
+          if [ "${{ steps.falcon-check.outputs.response }}" = "" ]; then
+            echo "Empty API response"
+            exit 1
+          fi
