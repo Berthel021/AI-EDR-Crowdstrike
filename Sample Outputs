@@ -1,0 +1,9 @@
+{
+  "detection_id": "ldt:ABCD1234",
+  "name": "AI-Detected Ransomware",
+  "severity": "Critical",
+  "device_id": "12345678",
+  "behaviors": [
+    {"tactic": "Impact", "technique": "Data Encrypted"}
+  ]
+}
