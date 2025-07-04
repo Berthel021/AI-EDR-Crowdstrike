@@ -1,0 +1,11 @@
+from falconpy import IOC
+
+def add_ransomware_ioc(file_hash):
+    ioc = IOC(client_id=FALCON_CLIENT_ID, client_secret=FALCON_CLIENT_SECRET)
+    ioc.create_indicator(
+        type="sha256",
+        value=file_hash,
+        platforms=["Windows"],
+        action="detect",
+        severity="High"
+    )
