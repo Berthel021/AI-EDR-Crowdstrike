@@ -1,0 +1,1 @@
+python main.py --mode realtime  # Start event stream analysis
