@@ -133,7 +133,7 @@ jobs:
       - uses: actions/checkout@v4
       
       - name: Upload models
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: threat-models
           path: ${{ env.MODEL_DIR }}/*.joblib
