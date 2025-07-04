@@ -1,0 +1,2 @@
+# Install CrowdStrike SDK
+pip install crowdstrike-falconpy
